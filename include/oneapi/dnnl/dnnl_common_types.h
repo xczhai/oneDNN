@@ -104,9 +104,11 @@ typedef enum {
     dnnl_u4 = 12,
     /// [MX-compliant 8-bit compliant scale data type](https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf) with 8-bit exponent.
     dnnl_e8m0 = 13,
-
+    /// 4-bit normalized float.
+    dnnl_nf4 = 14,
     /// 1-bit integer.
-    dnnl_bin = 14,
+    dnnl_bin = 15,
+
     /// Parameter to allow internal only data_types without undefined behavior.
     /// This parameter is chosen to be valid for so long as sizeof(int) >= 2.
     dnnl_data_type_max = 0x7fff,
