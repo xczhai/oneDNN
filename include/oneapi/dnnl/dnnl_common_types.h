@@ -106,8 +106,12 @@ typedef enum {
     dnnl_e8m0 = 13,
     /// 4-bit normalized float.
     dnnl_nf4 = 14,
+    /// 8-bit floating-point with a 8-bit exponent and a 0-bit mantissa
+    dnnl_f8_e8m0 = 15,
+    /// 4-bit floating-point with a 2-bit exponent and a 1-bit mantissa
+    dnnl_f4_e2m1 = 16,
     /// 1-bit integer.
-    dnnl_bin = 15,
+    dnnl_bin = 17,
 
     /// Parameter to allow internal only data_types without undefined behavior.
     /// This parameter is chosen to be valid for so long as sizeof(int) >= 2.

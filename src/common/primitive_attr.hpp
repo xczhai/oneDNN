@@ -264,11 +264,12 @@ struct runtime_scales_t : public c_compatible {
         return status::success;
     }
 
-    status_t set(const dims_t dims, int ndims) {
+    status_t set(const dims_t dims, int ndims, data_type_t data_type = data_type::f32) {
         is_set_ = true;
         ndims_ = ndims;
         mask_ = 1;
         utils::array_copy(dims_, dims, ndims_);
+        data_type_ = data_type;
         return status::success;
     }
 
@@ -346,9 +347,9 @@ struct arg_scales_t : public c_compatible {
     status_t set(int arg, int mask) {
         return set(arg, mask, 0, {}, data_type::f32);
     }
-    status_t set(int arg, const dims_t dims, int ndims) {
+    status_t set(int arg, const dims_t dims, int ndims, data_type_t data_type) {
         if (!check_arg(arg)) return status::invalid_arguments;
-        return scales_[arg].set(dims, ndims);
+        return scales_[arg].set(dims, ndims, data_type);
     }
 
     status_t set(int arg, int mask, int ndims, const dims_t group_dims,

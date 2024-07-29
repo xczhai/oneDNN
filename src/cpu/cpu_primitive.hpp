@@ -70,7 +70,7 @@
             VCHECK_ATTR(scales != nullptr, \
                     "Scales buffer for arg %d is missing", arg); \
             const auto scales_d = ctx.memory_mdw(DNNL_ARG_ATTR_SCALES | arg); \
-            bool ok = scales_d.data_type() == data_type::f32 \
+            bool ok = (scales_d.data_type() == data_type::f32 || scales_d.data_type() == data_type::f8_e8m0) \
                     && (scales_d.ndims() == 1 || scales_d.ndims() == 2); \
             if (!ok) return status::invalid_arguments; \
             if (scales_d.dims()[0] == 1) { \
