@@ -48,6 +48,12 @@ const impl_list_map_t &regular_fp8_impl_list_map() {
 
             nullptr,
         }},
+        // f8_e8m0 ->
+        {{f8_e8m0, data_type::undef, 0}, {
+            REG_SR(f8_e8m0, any, f8_e8m0, any, fmt_order::any, spec::reference)
+
+            nullptr,
+        }},
     });
     return the_map;
 }

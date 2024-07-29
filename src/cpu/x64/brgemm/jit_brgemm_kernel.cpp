@@ -310,7 +310,11 @@ private:
             used_vregs += 5;
         }
 
-        if (one_of(brg.dt_b, data_type::nf4) && brg.isa_impl != avx2) {
+        if (one_of(brg.dt_b, data_type::f4_e2m1) && brg.isa_impl == avx2) {
+            used_vregs += 2;
+        }
+
+        if (one_of(brg.dt_b, data_type::nf4, data_type::f4_e2m1) && brg.isa_impl != avx2) {
             used_vregs += 1;
         }
 
@@ -504,7 +508,7 @@ int jit_brgemm_kernel_t<Wmm>::A_offset(
 template <typename Wmm>
 int jit_brgemm_kernel_t<Wmm>::B_offset(
         int ld, int rd, bool is_amx) const noexcept {
-    int typesize_scale = one_of(brg.dt_b, data_type::nf4, data_type::s4, data_type::u4) ? 2 : 1;
+    int typesize_scale = one_of(brg.dt_b, data_type::nf4, data_type::s4, data_type::u4, data_type::f4_e2m1) ? 2 : 1;
     if (is_amx) {
         return brg.typesize_B * (brg.rd_step * ld * brg.ld_block) / typesize_scale;
     } else {
@@ -540,7 +544,7 @@ int jit_brgemm_kernel_t<Wmm>::rdb_A_offset() const noexcept {
 
 template <typename Wmm>
 int jit_brgemm_kernel_t<Wmm>::rdb_B_offset() const noexcept {
-    int typesize_scale = one_of(brg.dt_b, data_type::nf4, data_type::s4, data_type::u4) ? 2 : 1;
+    int typesize_scale = one_of(brg.dt_b, data_type::nf4, data_type::s4, data_type::u4, data_type::f4_e2m1) ? 2 : 1;
     return brg.typesize_B * brg.rd_block * brg.LDB / typesize_scale;
 }
 
@@ -550,7 +554,7 @@ int jit_brgemm_kernel_t<Wmm>::ldb_B_offset(
     const int data_vnni_granularity = brg.is_f16_b_non_amx_vnni()
             ? data_type_vnni_granularity(data_type::f16)
             : brg.ld_step;
-    int typesize_scale = one_of(brg.dt_b, data_type::nf4, data_type::s4, data_type::u4) ? 2 : 1;
+    int typesize_scale = one_of(brg.dt_b, data_type::nf4, data_type::s4, data_type::u4, data_type::f4_e2m1) ? 2 : 1;
     return (is_tail)
             ? brg.typesize_B * brg.ldb_tail * data_vnni_granularity / typesize_scale
             : brg.typesize_B * ld_block2 * brg.ld_block * data_vnni_granularity / typesize_scale;
@@ -639,8 +643,8 @@ int jit_brgemm_kernel_t<Wmm>::scales_offset(
 template <typename Wmm>
 int jit_brgemm_kernel_t<Wmm>::wei_scales_offset(
         int ld, bool is_tail) const noexcept {
-    return (is_tail) ? sizeof(float) * brg.ldb_tail
-                     : sizeof(float) * ld * brg.ld_block;
+    return (is_tail) ? types::data_type_size(brg.wei_decomp_scales_dt) * brg.ldb_tail
+                     : types::data_type_size(brg.wei_decomp_scales_dt) * ld * brg.ld_block;
 }
 
 template <typename Wmm>
@@ -2629,6 +2633,40 @@ void jit_brgemm_kernel_t<Wmm>::gemm_microkernel(int bd_block2, bool is_bdb_tail,
                 }
             };
 
+            auto load_scales = [&](Vmm vmm_scales, Xbyak::Address addr) {
+                if (brg.wei_decomp_scales_stride == 0) {
+                    switch (brg.wei_decomp_scales_dt) {
+                        case data_type::f32: {
+                            uni_vbroadcastss(vmm_scales, addr);
+                            break;
+                        }
+                        case data_type::f8_e8m0: {
+                            auto xmm_scales = Xmm(vmm_scales.getIdx());
+                            auto reg_ptr_32 = Reg32(reg_ptr.getIdx());
+                            movzx(reg_ptr_32, addr);
+                            uni_vmovq(xmm_scales, reg_ptr);
+                            uni_vpslld(xmm_scales, xmm_scales, 23);
+                            uni_vbroadcastss(vmm_scales, xmm_scales);
+                            break;
+                        }
+                        default: assert(!"unsupported data type");
+                    }
+                } else {
+                    switch (brg.wei_decomp_scales_dt) {
+                        case data_type::f32: {
+                            uni_vmovups(vmm_scales, addr);
+                            break;
+                        }
+                        case data_type::f8_e8m0: {
+                            uni_vpmovzxbd(vmm_scales, addr);
+                            uni_vpslld(vmm_scales, vmm_scales, 23);
+                            break;
+                        }
+                        default: assert(!"unsupported data type");
+                    }
+                }
+            };
+
             mov(ptr[rsp + reg_bdb_loop_offs_], reg_bdb_loop);
             mov(ptr[rsp + reg_ldb_loop_offs_], reg_ldb_loop);
 
@@ -2638,6 +2676,9 @@ void jit_brgemm_kernel_t<Wmm>::gemm_microkernel(int bd_block2, bool is_bdb_tail,
             auto vmm_lookup = Vmm(isa_num_vregs(brg.isa_impl) - 1);
             auto vmm_lookup_low = Vmm(isa_num_vregs(brg.isa_impl) - 3);
             auto vmm_lookup_high = Vmm(isa_num_vregs(brg.isa_impl) - 4);
+
+            auto vmm_mask_signed_bit = Vmm(isa_num_vregs(brg.isa_impl) - 2);
+
             if (brg.dt_b == data_type::nf4) {
                 static const float lookup[16] = {
                     -1.0,
@@ -2684,6 +2725,34 @@ void jit_brgemm_kernel_t<Wmm>::gemm_microkernel(int bd_block2, bool is_bdb_tail,
                     uni_vmovups(vmm_lookup, ptr[reg_ptr]);
                     vmm_zero_points = Vmm(isa_num_vregs(brg.isa_impl) - 2);
                 }
+            } else if (brg.dt_b == data_type::f4_e2m1) {
+                static const float lookup[16] = {
+                    0.0f,   0.5f,
+                    1.0f,   1.5f,
+                    2.0f,   3.0f,
+                    4.0f,   6.0f,
+                    -0.0f,  -0.5f,
+                    -1.0f,  -1.5f,
+                    -2.0f,  -3.0f,
+                    -4.0f,  -6.0f
+                };
+
+                static const uint32_t mask_signed_bit[8] = {
+                    0x80000000, 0x80000000, 0x80000000, 0x80000000,
+                    0x80000000, 0x80000000, 0x80000000, 0x80000000,
+                };
+
+                if (brg.isa_impl == avx2) {
+                    mov(reg_ptr, (size_t)lookup);
+                    uni_vmovups(vmm_lookup, ptr[reg_ptr]);
+                    mov(reg_ptr, (size_t)mask_signed_bit);
+                    uni_vmovups(vmm_mask_signed_bit, ptr[reg_ptr]);
+                    vmm_zero_points = Vmm(isa_num_vregs(brg.isa_impl) - 3);
+                } else {
+                    mov(reg_ptr, (size_t)lookup);
+                    uni_vmovups(vmm_lookup, ptr[reg_ptr]);
+                    vmm_zero_points = Vmm(isa_num_vregs(brg.isa_impl) - 2);
+                }
             }
 
             mov(reg_local_wei_scales, ptr[rsp + reg_aux2_wei_scales_offs_]);
@@ -2714,11 +2783,10 @@ void jit_brgemm_kernel_t<Wmm>::gemm_microkernel(int bd_block2, bool is_bdb_tail,
                         }
                         uni_vcvtdq2ps(vmm_load, vmm_load);
                     } else if (brg.dt_b == data_type::s4) {
+                        uni_vpmovsxbd(vmm_load, addr);
                         if (rd % 2 == 0) {
-                            uni_vpmovsxbd(vmm_load, addr);
                             vpsrad(vmm_load, vmm_load, 4);
                         } else {
-                            uni_vpmovsxbd(vmm_load, addr);
                             uni_vpslld(vmm_load, vmm_load, 28);
                             vpsrad(vmm_load, vmm_load, 28);
                         }
@@ -2743,6 +2811,29 @@ void jit_brgemm_kernel_t<Wmm>::gemm_microkernel(int bd_block2, bool is_bdb_tail,
                         } else {
                             vpermd(vmm_load, vmm_load, vmm_lookup);
                         }
+                    } else if (brg.dt_b == data_type::f4_e2m1) {
+                        if (brg.isa_impl == avx2) {
+                            uni_vpmovsxbd(vmm_load, addr);
+                            if (rd % 2 == 0) {
+                                vpsrad(vmm_load, vmm_load, 4);
+                            } else {
+                                uni_vpslld(vmm_load, vmm_load, 28);
+                                vpsrad(vmm_load, vmm_load, 28);
+                            }
+                            auto mask = bcst();
+                            uni_vpand(mask, vmm_load, vmm_mask_signed_bit);
+                            vpermd(vmm_load, vmm_load, vmm_lookup);
+                            uni_vorps(vmm_load, vmm_load, mask);
+                        } else {
+                            uni_vpmovzxbd(vmm_load, addr);
+                            if (rd % 2 == 0) {
+                                uni_vpsrld(vmm_load, vmm_load, 4);
+                            } else {
+                                uni_vpslld(vmm_load, vmm_load, 28);
+                                uni_vpsrld(vmm_load, vmm_load, 28);
+                            }
+                            vpermd(vmm_load, vmm_load, vmm_lookup);
+                        }
                     } else {
                         assert(!"unsupported combination");
                     }
@@ -2758,9 +2849,9 @@ void jit_brgemm_kernel_t<Wmm>::gemm_microkernel(int bd_block2, bool is_bdb_tail,
 
                     if (brg.with_wei_decomp_scales && brg.bd_block != 1) {
                         if (brg.wei_decomp_scales_stride == 0) {
-                            uni_vbroadcastss(bcst(), ptr[reg_local_wei_scales]);
+                            load_scales(bcst(), ptr[reg_local_wei_scales]);
                         } else {
-                            uni_vmovups(bcst(), ptr[reg_local_wei_scales + ld * brg.ld_block * sizeof(float)]);
+                            load_scales(bcst(), ptr[reg_local_wei_scales + ld * brg.ld_block * types::data_type_size(brg.wei_decomp_scales_dt)]);
                         }
                         uni_vmulps(vmm_load, vmm_load, bcst());
                     }
@@ -2810,7 +2901,7 @@ void jit_brgemm_kernel_t<Wmm>::gemm_microkernel(int bd_block2, bool is_bdb_tail,
                 for (int ld = 0; ld < ld_block2; ld++) {
                     auto vmm_accm_tmp = accm_tmp(ld_block2, 0, ld);
                     auto vmm_accm = accm(ld_block2, 0, ld);
-                    uni_vmovups(bcst(), ptr[reg_local_wei_scales + ld * brg.ld_block * sizeof(float)]);
+                    load_scales(bcst(), ptr[reg_local_wei_scales + ld * brg.ld_block * types::data_type_size(brg.wei_decomp_scales_dt)]);
                     uni_vfmadd231ps(vmm_accm, vmm_accm_tmp, bcst());
                 }
             }
@@ -2959,7 +3050,7 @@ void jit_brgemm_kernel_t<Wmm>::ldb_loop(int bd_block2, bool is_bdb_tail,
 
                         if (brg.with_wei_decomp_scales && brg.wei_decomp_scales_stride != 0) {
                             ic_group_shift(reg_aux_wei_scales_offs_, reg_aux2_wei_scales_offs_,
-                                           brg.wei_decomp_scales_group_size, brg.wei_decomp_scales_stride * sizeof(float));
+                                           brg.wei_decomp_scales_group_size, brg.wei_decomp_scales_stride * types::data_type_size(brg.wei_decomp_scales_dt));
                         }
 
                         if (brg.with_wei_decomp_zero_points && brg.wei_decomp_zero_points_stride != 0) {

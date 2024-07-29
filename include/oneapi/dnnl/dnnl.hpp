@@ -903,6 +903,10 @@ struct memory : public handle<dnnl_memory_t> {
         bin = dnnl_bin,
         /// 4-bit normalized float.
         nf4 = dnnl_nf4,
+        /// 8-bit floating-point with a 8-bit exponent and a 0-bit mantissa.
+        f8_e8m0 = dnnl_f8_e8m0,
+        /// 4-bit floating-point with a 2-bit exponent and a 1-bit mantissa.
+        f4_e2m1 = dnnl_f4_e2m1
     };
 
     /// Returns size of data type in bytes.
@@ -4239,8 +4243,8 @@ struct primitive_attr : public handle<dnnl_primitive_attr_t> {
         error::wrap_c_api(dnnl_primitive_attr_set_scales_mask(get(), arg, mask),
                 "could not set scales primitive attribute");
     }
-    void set_scales_dims(int arg, const memory::dims& dims) {
-        error::wrap_c_api(dnnl_primitive_attr_set_scales_dims(get(), arg, dims.data(), dims.size()),
+    void set_scales_dims(int arg, const memory::dims& dims, memory::data_type data_type = memory::data_type::f32) {
+        error::wrap_c_api(dnnl_primitive_attr_set_scales_dims(get(), arg, dims.data(), dims.size(), memory::convert_to_c(data_type)),
                 "could not set scales primitive attribute");
     }
 
