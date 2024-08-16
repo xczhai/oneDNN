@@ -4403,7 +4403,7 @@ status_t create_brgemm_matmul_copy_b(
             CHECK(safe_ptr_assign(copy_ker,
                     new jit_brgemm_matmul_copy_b_transposed_t<Zmm>(conf)));
         else {
-            assert(one_of(conf->isa, avx2));
+            assert(one_of(conf->isa, avx2, avx2_vnni, avx2_vnni_2));
             CHECK(safe_ptr_assign(copy_ker,
                     new jit_brgemm_matmul_copy_b_transposed_t<Ymm>(conf)));
         }
