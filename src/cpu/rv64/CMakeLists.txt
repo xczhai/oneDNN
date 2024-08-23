@@ -32,8 +32,8 @@ if(NOT DNNL_RISCV_USE_RVV_INTRINSICS)
     endif()
 endif()
 
-if(NOT DNNL_CPU_RUNTIME STREQUAL "SEQ")
-    message(FATAL_ERROR "Only sequential runtime is now supported for a RISC-V CPU")
+if(NOT (DNNL_CPU_RUNTIME STREQUAL "SEQ" OR DNNL_CPU_RUNTIME STREQUAL "OMP"))
+    message(FATAL_ERROR "Only sequential runtime and OpenMP runtime are now supported for a RISC-V CPU")
 endif()
 
 # Build sources into an object library
